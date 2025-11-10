@@ -1,0 +1,8 @@
+{
+  "name": "Mphakathi",
+  "description": "Mphakathi is a community-focused safety app designed to provide proactive protection and emergency assistance. It uses intelligent voice analysis to detect distress and connect users with their support network.",
+  "requestFramePermissions": [
+    "microphone",
+    "geolocation"
+  ]
+}
