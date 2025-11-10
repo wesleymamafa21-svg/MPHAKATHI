@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, Chat } from "@google/genai";
 import { Emotion, EmotionState, Gender, CalmAssistStyle, AcousticAnalysis, SafetyAction } from '../types';
 
 if (!process.env.API_KEY) {
@@ -6,6 +6,26 @@ if (!process.env.API_KEY) {
 }
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+export function initializeChat(location: { latitude: number; longitude: number } | null): Chat {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const chat = ai.chats.create({
+        model: 'gemini-2.5-flash',
+        config: {
+            tools: [{googleMaps: {}}],
+            toolConfig: location ? {
+              retrievalConfig: {
+                latLng: {
+                  latitude: location.latitude,
+                  longitude: location.longitude
+                }
+              }
+            } : undefined,
+            systemInstruction: "You are a helpful assistant for Mphakathi, a community safety app. Provide helpful, safe, and location-aware information. If asked about nearby places like police stations or hospitals, use the provided tools.",
+        },
+    });
+    return chat;
+}
 
 const emotionAnalysisSchema = {
     type: Type.OBJECT,

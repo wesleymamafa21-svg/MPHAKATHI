@@ -13,6 +13,7 @@ export enum AlertLevel {
   None = 'None',
   Warning = 'Warning',
   Critical = 'Critical',
+  Success = 'Success',
 }
 
 export enum Gender {
@@ -141,4 +142,12 @@ export interface SafetyInboxThread {
     timestamp: Date;
     status: SafetyInboxStatus;
     messages: SafetyInboxMessage[];
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'model' | 'system';
+  text: string;
+  timestamp: Date;
+  groundingChunks?: any[]; 
 }

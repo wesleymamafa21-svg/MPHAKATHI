@@ -10,15 +10,15 @@ const MphakathiLogo: React.FC = () => {
             </svg>
             <h1 className="text-5xl tracking-wider relative">
                 <span className="text-yellow-400">MPHA</span>
-                <span className="text-white">KATH</span>
-                <span className="text-white relative">
+                <span className="text-gray-800 dark:text-white">KATH</span>
+                <span className="text-gray-800 dark:text-white relative">
                     I
                     <span className="absolute -top-1 -right-2 transform translate-x-1/2 -translate-y-1/2 text-sm">
                        ✊
                     </span>
                 </span>
             </h1>
-            <p className="text-white text-lg tracking-wider font-sans font-semibold mt-1">
+            <p className="text-gray-800 dark:text-white text-lg tracking-wider font-sans font-semibold mt-1">
                 The Power to Protect
             </p>
         </div>

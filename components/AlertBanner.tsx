@@ -16,6 +16,10 @@ const alertConfig: Record<AlertLevel, { bg: string; icon: React.ReactNode }> = {
     bg: 'bg-red-600/90 border-red-700', 
     icon: <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
   },
+  [AlertLevel.Success]: { 
+    bg: 'bg-green-600/90 border-green-700', 
+    icon: <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+  },
 };
 
 const AlertBanner: React.FC<AlertBannerProps> = ({ alert, onDismiss }) => {

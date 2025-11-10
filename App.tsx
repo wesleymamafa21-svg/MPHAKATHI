@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { GoogleGenAI, LiveServerMessage, Modality, Blob as GeminiBlob } from '@google/genai';
-import { User, Emotion, EmotionState, Alert, AlertLevel, TranscriptionEntry, Gender, EmergencyContact, SimulatedUser, CompletedRecording, CalmAssistStyle, SensitivityLevel, VoiceSafeCode, SecurityLogEntry, CheckInInterval, ReminderInterval, SafetyInboxThread, SafetyInboxStatus, SafetyInboxMessage, AcousticAnalysis, SafetyAction } from './types';
-import { analyzeEmotion, getSafetyTip, analyzeAcousticDistress, getSafetyActions } from './services/geminiService';
+import { GoogleGenAI, LiveServerMessage, Modality, Blob as GeminiBlob, Chat } from '@google/genai';
+import { User, Emotion, EmotionState, Alert, AlertLevel, TranscriptionEntry, Gender, EmergencyContact, SimulatedUser, CompletedRecording, CalmAssistStyle, SensitivityLevel, VoiceSafeCode, SecurityLogEntry, CheckInInterval, ReminderInterval, SafetyInboxThread, SafetyInboxStatus, SafetyInboxMessage, AcousticAnalysis, SafetyAction, ChatMessage } from './types';
+import { analyzeEmotion, getSafetyTip, analyzeAcousticDistress, getSafetyActions, initializeChat } from './services/geminiService';
 import EmotionIndicator from './components/EmotionIndicator';
 import AlertBanner from './components/AlertBanner';
 import TranscriptionLog from './components/TranscriptionLog';
@@ -9,7 +9,7 @@ import Profile from './components/Profile';
 import Settings from './components/Settings';
 import Help from './components/Help';
 import Donate from './components/SupportMission';
-import ChatModal from './components/ChatModal';
+import SOSModal from './components/SOSModal';
 import PinModal from './components/PinModal';
 import ContinueListeningModal from './components/ContinueListeningModal';
 import DeEscalationModal from './components/DeEscalationModal';
@@ -20,6 +20,7 @@ import VoiceSafeCodeManager from './components/VoiceSafeCodeManager';
 import SafetyInboxIcon from './components/SafetyInboxIcon';
 import SafetyInbox from './components/SafetyInbox';
 import ChatView from './components/ChatView';
+import GeminiChat from './components/GeminiChat';
 import MamafaLogo from './components/MamafaLogo';
 import Auth from './components/Auth';
 import Onboarding from './components/Onboarding';
@@ -110,21 +111,21 @@ const RecordingConsentModal: React.FC<{
     if (!isOpen) return null;
     return (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-            <div className="bg-gray-800 rounded-lg shadow-2xl p-6 w-full max-w-md border border-gray-600">
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-2xl p-6 w-full max-w-md border border-gray-200 dark:border-gray-600">
                 <h2 className="text-2xl font-bold text-yellow-400 mb-4">Record Audio?</h2>
-                <p className="text-gray-300 mb-6">
+                <p className="text-gray-700 dark:text-gray-300 mb-6">
                     You can optionally save a recording of this session to your device. Recordings are saved in 30-minute segments and can be downloaded from your profile.
                 </p>
                 <div className="flex justify-end gap-4 flex-wrap">
                     <button
                         onClick={onClose}
-                        className="px-6 py-2 bg-gray-700 hover:bg-gray-600 text-white font-semibold rounded-full transition-colors"
+                        className="px-6 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-white font-semibold rounded-full transition-colors"
                     >
                         Close
                     </button>
                     <button
                         onClick={() => onConsent(false)}
-                        className="px-6 py-2 bg-gray-600 hover:bg-gray-500 text-white font-semibold rounded-full transition-colors"
+                        className="px-6 py-2 bg-gray-300 dark:bg-gray-600 hover:bg-gray-400 dark:hover:bg-gray-500 text-gray-800 dark:text-white font-semibold rounded-full transition-colors"
                     >
                         Activate Only
                     </button>
@@ -140,9 +141,12 @@ const RecordingConsentModal: React.FC<{
     );
 };
 
-type View = 'main' | 'profile' | 'settings' | 'help' | 'donate' | 'payment-processing' | 'donation-confirmation' | 'inbox' | 'chat';
+type View = 'main' | 'profile' | 'settings' | 'help' | 'donate' | 'payment-processing' | 'donation-confirmation' | 'inbox' | 'chat' | 'gemini-chat';
 
 const App: React.FC = () => {
+    const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+        return (localStorage.getItem('mphakathi_theme') as 'light' | 'dark') || 'dark';
+    });
     const [currentUser, setCurrentUser] = useState<User | null>(null);
     const [isListening, setIsListening] = useState(false);
     const [statusMessage, setStatusMessage] = useState('Ready to activate');
@@ -155,7 +159,7 @@ const App: React.FC = () => {
     const [view, setView] = useState<View>('main');
     const [autoSosCountdown, setAutoSosCountdown] = useState<number | null>(null);
     const [emergencyContacts, setEmergencyContacts] = useState<EmergencyContact[]>([]);
-    const [isChatModalOpen, setIsChatModalOpen] = useState(false);
+    const [isSOSModalOpen, setIsSOSModalOpen] = useState(false);
     const [simulatedUsers, setSimulatedUsers] = useState<SimulatedUser[]>([]);
     const [liveTranscript, setLiveTranscript] = useState<string>('');
     const [showConsentModal, setShowConsentModal] = useState(false);
@@ -191,6 +195,9 @@ const App: React.FC = () => {
     const [contactsSkipped, setContactsSkipped] = useState(false);
     const [vscSkipped, setVscSkipped] = useState(false);
     const [safetyAction, setSafetyAction] = useState<SafetyAction | null>(null);
+    // Chatbot State
+    const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+    const [isChatbotResponding, setIsChatbotResponding] = useState(false);
     // FIX: Define state for check-in and reminder intervals.
     const [checkInInterval, setCheckInInterval] = useState<CheckInInterval>(CheckInInterval.FifteenMinutes);
     const [reminderInterval, setReminderInterval] = useState<ReminderInterval>(ReminderInterval.OneHour);
@@ -217,9 +224,25 @@ const App: React.FC = () => {
     const silentActivationInProgress = useRef(false);
     const moderateConfidenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const tipBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const chatSessionRef = useRef<Chat | null>(null);
+
 
     const isListeningRef = useRef(isListening);
     isListeningRef.current = isListening;
+
+    useEffect(() => {
+        const root = window.document.documentElement;
+        const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+
+        if (theme === 'dark') {
+            root.classList.add('dark');
+            themeColorMeta?.setAttribute('content', '#111827');
+        } else {
+            root.classList.remove('dark');
+            themeColorMeta?.setAttribute('content', '#ffffff');
+        }
+        localStorage.setItem('mphakathi_theme', theme);
+    }, [theme]);
 
     const fetchSafetyTip = useCallback(async (user: User) => {
         if (!user.gender) return;
@@ -289,8 +312,7 @@ const App: React.FC = () => {
     // Load data from localStorage on initial render
     useEffect(() => {
         try {
-            // Automatic login is disabled to ensure the auth screen is always the entry point.
-            // User state is now set exclusively through the login/register actions.
+            // Automatic login is disabled. User state is now set exclusively through the Auth component.
 
             const savedPin = localStorage.getItem('mphakathi_pin');
             if (savedPin) setPin(savedPin);
@@ -439,7 +461,7 @@ const App: React.FC = () => {
             const name = currentUser?.fullName || 'The user of this device';
             const message = `🚨 Mphakathi Emergency Alert 🚨
 Distress sound (${trigger}) detected from ${name}.
-Location: ${locationInfo}
+Location (shared for safety): ${locationInfo}
 Time: ${time}
 Mphakathi Network has been notified.
 – Mphakathi App`;
@@ -679,9 +701,24 @@ Mphakathi Network has been notified.
             setAlert({ level: AlertLevel.Warning, message: "Audio recording is not supported on this browser. Continuing without recording." });
             shouldRecord = false;
         }
+
+        // Reset chat session to get updated location
+        chatSessionRef.current = null; 
+
         navigator.geolocation.getCurrentPosition(
-            (position) => setLocation({ latitude: position.coords.latitude, longitude: position.coords.longitude }),
-            () => setStatusMessage("Warning: Location access denied. Reporting will be limited.")
+            (position) => {
+                const coords = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+                setLocation(coords);
+                if (!chatSessionRef.current) {
+                    chatSessionRef.current = initializeChat(coords);
+                }
+            },
+            () => {
+                setStatusMessage("Warning: Location access denied. Reporting will be limited.");
+                if (!chatSessionRef.current) {
+                    chatSessionRef.current = initializeChat(null);
+                }
+            }
         );
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -1009,7 +1046,7 @@ If you received this, the system is working.
     const handleSendMessage = (message: string) => {
          const recipientCount = emergencyContacts.length + simulatedUsers.length;
          setAlert({ level: AlertLevel.Critical, message: `Alert sent to ${recipientCount} recipients.` });
-         setIsChatModalOpen(false);
+         setIsSOSModalOpen(false);
          console.log('--- EMERGENCY MESSAGE SENT ---', { message, emergencyContacts, simulatedUsers });
     };
 
@@ -1186,6 +1223,9 @@ If you received this, the system is working.
 
         setCurrentUser(user);
         localStorage.setItem('mphakathi_user', JSON.stringify(user));
+
+        setAlert({ level: AlertLevel.Success, message: `Welcome, ${user.fullName.split(' ')[0]}! A welcome email has been sent.` });
+        
         if (user.isSurvivor) {
             setSensitivity(SensitivityLevel.High);
             setAlert({ level: AlertLevel.Warning, message: "For your safety, detection sensitivity has been set to High." });
@@ -1197,15 +1237,33 @@ If you received this, the system is working.
     };
 
     const handleLogout = () => {
+        // Clear sensitive user data from localStorage
         localStorage.removeItem('mphakathi_user');
+        localStorage.removeItem('mphakathi_pin');
+        localStorage.removeItem('mphakathi_transcriptionHistory');
+        localStorage.removeItem('mphakathi_emergencyContacts');
+        localStorage.removeItem('mphakathi_vsc');
+        localStorage.removeItem('mphakathi_vsc_cancel');
+        localStorage.removeItem('mphakathi_securityLog');
+        localStorage.removeItem('mphakathi_inbox');
+        localStorage.removeItem('mphakathi_unread_inbox');
+        localStorage.removeItem('mphakathi_contacts_skipped');
         localStorage.removeItem('mphakathi_vsc_skipped');
+    
+        // Reset component state
         setCurrentUser(null);
-        // Reset sensitive state
         setTranscriptionLog([]);
         setCompletedRecordings([]);
         setSecurityLog([]);
         setVscSkipped(false);
-        setView('main');
+        setContactsSkipped(false);
+        setEmergencyContacts([]);
+        setSafetyInbox([]);
+        setUnreadInboxCount(0);
+        setPin(null);
+        setVoiceSafeCode(null);
+        setCancelSafeWord(null);
+        setView('main'); // This will redirect to the Auth component because currentUser is null
     };
 
     const handleSkipVsc = () => {
@@ -1224,12 +1282,72 @@ If you received this, the system is working.
         setPinError('');
     };
 
+    const handleSendChatMessage = async (message: string) => {
+        if (!message.trim() || isChatbotResponding) return;
+    
+        const userMessage: ChatMessage = {
+            id: crypto.randomUUID(),
+            role: 'user',
+            text: message,
+            timestamp: new Date(),
+        };
+        setChatMessages(prev => [...prev, userMessage]);
+        setIsChatbotResponding(true);
+    
+        if (!chatSessionRef.current) {
+            setChatMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'system', text: 'Chat is not initialized. Please ensure location permissions are enabled and try again.', timestamp: new Date() }]);
+            setIsChatbotResponding(false);
+            return;
+        }
+        
+        try {
+            const stream = await chatSessionRef.current.sendMessageStream({ message });
+            
+            let modelResponseText = '';
+            let groundingChunks: any[] | undefined = [];
+            const modelMessageId = crypto.randomUUID();
+    
+            setChatMessages(prev => [...prev, { id: modelMessageId, role: 'model', text: '', timestamp: new Date() }]);
+    
+            for await (const chunk of stream) {
+                modelResponseText = chunk.text;
+                if (chunk.candidates && chunk.candidates[0].groundingMetadata) {
+                     groundingChunks = chunk.candidates[0].groundingMetadata.groundingChunks;
+                }
+                
+                setChatMessages(prev => prev.map(msg => 
+                    msg.id === modelMessageId 
+                    ? { ...msg, text: modelResponseText, groundingChunks } 
+                    : msg
+                ));
+            }
+    
+            if (modelResponseText.trim() === '') {
+                 setChatMessages(prev => prev.map(msg => 
+                    msg.id === modelMessageId 
+                    ? { ...msg, text: "I'm sorry, I couldn't generate a response. Please try rephrasing your question." } 
+                    : msg
+                ));
+            }
+        } catch (error) {
+            console.error("Chatbot error:", error);
+            setChatMessages(prev => [...prev, {
+                id: crypto.randomUUID(),
+                role: 'system',
+                text: 'Sorry, I encountered an error. Please check your connection and try again.',
+                timestamp: new Date(),
+            }]);
+        } finally {
+            setIsChatbotResponding(false);
+        }
+    };
+
     const renderMainView = () => (
       <div className="w-full max-w-4xl flex flex-col items-center justify-center space-y-6 animate-fade-in">
         <MphakathiLogo />
         <EmotionIndicator emotionState={emotionState} isListening={isListening} isCountingDown={autoSosCountdown !== null} />
         <div className="text-center">
-            <p className="text-lg md:text-xl text-gray-400 mt-2">{statusMessage}</p>
+            <p className="text-lg md:text-xl text-gray-600 dark:text-gray-400 mt-2">{statusMessage}</p>
              {moderateConfidenceTrigger && (
                 <p className="text-sm text-yellow-400 animate-pulse">Moderate distress detected. Monitoring closely...</p>
             )}
@@ -1266,7 +1384,7 @@ If you received this, the system is working.
                 </button>
             )}
             <button
-                onClick={() => setIsChatModalOpen(true)}
+                onClick={() => setIsSOSModalOpen(true)}
                 className="w-full md:w-auto px-8 py-4 bg-red-600 hover:bg-red-700 text-white font-bold text-xl rounded-full shadow-lg transition-transform transform hover:scale-105"
             >
                 Send SOS
@@ -1277,28 +1395,44 @@ If you received this, the system is working.
         <TranscriptionLog entries={transcriptionLog} liveTranscript={liveTranscript} emptyMessage="Activate to see transcription here..." />
         
         <div className="absolute top-4 right-4 flex gap-3">
-             <button onClick={() => setView('settings')} className="p-2 rounded-full bg-gray-700 hover:bg-gray-600 transition-colors" aria-label="Open Settings">
+             <button onClick={() => setView('settings')} className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors" aria-label="Open Settings">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066 2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
              </button>
-             <button onClick={() => setView('help')} className="p-2 rounded-full bg-gray-700 hover:bg-gray-600 transition-colors" aria-label="Open Help">
+             <button onClick={() => setView('help')} className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors" aria-label="Open Help">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
              </button>
-             <button onClick={() => setView('donate')} className="p-2 rounded-full bg-gray-700 hover:bg-gray-600 transition-colors" aria-label="Donate">
+             <button onClick={() => setView('donate')} className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors" aria-label="Donate">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" /></svg>
              </button>
              <SafetyInboxIcon unreadCount={unreadInboxCount} onClick={handleViewInbox} />
-             <button onClick={() => setView('profile')} className="p-2 rounded-full bg-gray-700 hover:bg-gray-600 transition-colors" aria-label="Open Profile">
+             <button onClick={() => setView('profile')} className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors" aria-label="Open Profile">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
              </button>
         </div>
+        <button
+            onClick={() => setView('gemini-chat')}
+            className="fixed bottom-6 right-6 bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-full shadow-lg z-20 transition-transform transform hover:scale-110"
+            aria-label="Open AI Assistant"
+        >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+        </button>
       </div>
     );
     
     const activeChatThread = safetyInbox.find(t => t.id === activeChatThreadId);
 
+    useEffect(() => {
+        // If the user is on the chat view but the thread doesn't exist (e.g., cleared inbox),
+        // redirect them back to the inbox to prevent a blank screen.
+        if (view === 'chat' && !activeChatThread) {
+            setView('inbox');
+        }
+    }, [view, activeChatThread]);
+
+
     if (!currentUser) {
         return (
-            <div className="relative min-h-screen flex flex-col items-center justify-center p-4 bg-gray-900 text-white font-sans overflow-hidden">
+            <div className="relative min-h-screen flex flex-col items-center justify-center p-4">
                 <div className="absolute inset-0 bg-grid-pattern opacity-10 pointer-events-none"></div>
                 <Auth onAuthSuccess={handleAuthSuccess} />
             </div>
@@ -1309,7 +1443,7 @@ If you received this, the system is working.
 
     if (!isOnboardingComplete) {
         return (
-            <div className="relative min-h-screen flex flex-col items-center justify-center p-4 bg-gray-900 text-white font-sans overflow-hidden">
+            <div className="relative min-h-screen flex flex-col items-center justify-center p-4">
                 <div className="absolute inset-0 bg-grid-pattern opacity-10 pointer-events-none"></div>
                 <Onboarding
                     userName={currentUser.fullName}
@@ -1329,12 +1463,8 @@ If you received this, the system is working.
     }
 
     return (
-        <div className="relative min-h-screen flex flex-col items-center justify-center p-4 bg-gray-900 text-white font-sans overflow-hidden">
+        <div className="relative min-h-screen flex flex-col items-center justify-center p-4 overflow-hidden">
              <style>{`
-                .bg-grid-pattern {
-                    background-image: linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
-                    background-size: 2rem 2rem;
-                }
                 @keyframes fade-in {
                     from { opacity: 0; }
                     to { opacity: 1; }
@@ -1376,9 +1506,9 @@ If you received this, the system is working.
                 onConsent={handleConsent} 
                 onClose={() => setShowConsentModal(false)}
             />
-            <ChatModal 
-                isOpen={isChatModalOpen} 
-                onClose={() => setIsChatModalOpen(false)} 
+            <SOSModal 
+                isOpen={isSOSModalOpen} 
+                onClose={() => setIsSOSModalOpen(false)} 
                 contacts={emergencyContacts}
                 simulatedUsers={simulatedUsers}
                 onSend={handleSendMessage}
@@ -1451,6 +1581,8 @@ If you received this, the system is working.
                         onInstallApp={handleInstallApp}
                         onLogout={handleLogout}
                         onBack={() => setView('main')}
+                        theme={theme}
+                        onThemeChange={setTheme}
                     />
                  )}
                 {view === 'help' && (
@@ -1480,6 +1612,14 @@ If you received this, the system is working.
                         onSendMessage={handleSendMessageInChat}
                         onBack={() => setView('inbox')}
                      />
+                )}
+                {view === 'gemini-chat' && (
+                    <GeminiChat 
+                        messages={chatMessages}
+                        onSendMessage={handleSendChatMessage}
+                        isResponding={isChatbotResponding}
+                        onBack={() => setView('main')}
+                    />
                 )}
                  {view === 'payment-processing' && (
                     <PaymentProcessing 

@@ -37,7 +37,7 @@ const EmotionIndicator: React.FC<EmotionIndicatorProps> = ({ emotionState, isLis
       {isCountingDown && <div className={`absolute w-full h-full rounded-full ${config.ringColor.replace('ring-','bg-')} opacity-75 animate-ping`} aria-hidden="true"></div>}
       <svg className="absolute w-full h-full transform -rotate-90" viewBox="0 0 200 200" aria-hidden="true">
         <circle
-          className="text-gray-700"
+          className="text-gray-200 dark:text-gray-700"
           stroke="currentColor"
           strokeWidth="10"
           fill="transparent"
