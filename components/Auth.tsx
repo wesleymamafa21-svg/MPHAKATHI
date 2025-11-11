@@ -31,6 +31,7 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
     const [regPassword, setRegPassword] = useState('');
     const [regConfirmPassword, setRegConfirmPassword] = useState('');
     const [regIsSurvivor, setRegIsSurvivor] = useState(false);
+    const [regGender, setRegGender] = useState<Gender | null>(null);
     const [regError, setRegError] = useState('');
 
     // Forgot Password State
@@ -96,6 +97,11 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
             return;
         }
 
+        if (regGender === null) {
+            setRegError('Please select a gender identity to continue.');
+            return;
+        }
+
         // More robust password validation
         const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
         if (!passwordRegex.test(regPassword)) {
@@ -119,7 +125,7 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
                 fullName: regFullName,
                 email: regEmail,
                 password: regPassword, 
-                gender: null, // User can set this in their profile later
+                gender: regGender,
                 isSurvivor: regIsSurvivor,
             };
 
@@ -274,6 +280,28 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
                 className="w-full bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md p-3 text-gray-900 dark:text-white focus:ring-2 focus:ring-yellow-500"
                 required
             />
+
+            <div className="pt-2">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2 text-center">Gender Identity</h3>
+                <p className="text-center text-sm text-gray-500 dark:text-gray-400 pb-2">Select an identity for tailored safety tips.</p>
+                <div className="flex justify-center gap-2 flex-wrap">
+                    {(Object.values(Gender)).map(genderValue => (
+                        <button
+                            type="button"
+                            key={genderValue}
+                            onClick={() => setRegGender(genderValue)}
+                            className={`px-4 py-2 rounded-full transition-colors text-sm ${
+                                regGender === genderValue
+                                ? 'bg-yellow-500 text-black font-semibold'
+                                : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600'
+                            }`}
+                        >
+                            {genderValue}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
             <div className="pt-2">
                 <label className="flex items-start gap-3 cursor-pointer">
                     <input

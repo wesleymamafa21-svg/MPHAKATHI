@@ -77,10 +77,6 @@ const Settings: React.FC<SettingsProps> = ({
         onUserUpdate({ ...user, fullName: name });
     };
 
-    const handleGenderSelect = (gender: Gender | null) => {
-        onUserUpdate({ ...user, gender });
-    };
-
     return (
         <div className="w-full max-w-4xl flex flex-col items-center p-4 animate-fade-in">
             <div className="w-full flex justify-between items-center mb-6">
@@ -130,30 +126,6 @@ const Settings: React.FC<SettingsProps> = ({
                 />
             </div>
 
-            <div className="w-full bg-white dark:bg-gray-800/50 p-6 rounded-lg mb-6 shadow-sm">
-                <h3 className="text-xl font-semibold text-yellow-400 mb-4">Gender Identity</h3>
-                {user.gender ? (
-                    <div className="flex items-center justify-between">
-                        <p className="text-lg">Your selected identity: <span className="font-bold">{user.gender}</span></p>
-                        <button onClick={() => handleGenderSelect(null)} className="text-sm bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 px-3 py-1 rounded-full transition-colors">Change</button>
-                    </div>
-                ) : (
-                    <div>
-                        <p className="mb-3 text-gray-700 dark:text-gray-300">Select an identity for tailored safety tips:</p>
-                        <div className="flex justify-center gap-2 flex-wrap">
-                            {(Object.keys(Gender) as Array<keyof typeof Gender>).map(key => (
-                                <button
-                                    key={key}
-                                    onClick={() => handleGenderSelect(Gender[key])}
-                                    className="px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-yellow-500 hover:text-black rounded-full transition-colors">
-                                    {Gender[key]}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                )}
-            </div>
-            
             <PinManager pinIsSet={pinIsSet} onSetPin={onSetPin} />
             
             <div className="w-full bg-white dark:bg-gray-800/50 p-6 rounded-lg mb-6 shadow-sm">
