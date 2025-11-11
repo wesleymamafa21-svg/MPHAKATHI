@@ -23,6 +23,7 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
     const [loginEmail, setLoginEmail] = useState('');
     const [loginPassword, setLoginPassword] = useState('');
     const [loginError, setLoginError] = useState('');
+    const [rememberMe, setRememberMe] = useState(false);
 
     // Register State
     const [regFullName, setRegFullName] = useState('');
@@ -36,6 +37,21 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
     const [forgotEmail, setForgotEmail] = useState('');
     const [forgotError, setForgotError] = useState('');
 
+    useEffect(() => {
+        try {
+            const rememberedEmail = localStorage.getItem('mphakathi_remembered_email');
+            const rememberedPassword = localStorage.getItem('mphakathi_remembered_password');
+
+            if (rememberedEmail && rememberedPassword) {
+                setLoginEmail(rememberedEmail);
+                setLoginPassword(rememberedPassword);
+                setRememberMe(true);
+            }
+        } catch (error) {
+            console.error("Failed to load remembered credentials", error);
+        }
+    }, []);
+
     const handleLogin = (e: React.FormEvent) => {
         e.preventDefault();
         setLoginError('');
@@ -47,6 +63,14 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
             // In a real app, you would send the password to the server,
             // which would compare it against the stored hash.
             if (user && user.password === loginPassword) {
+                if (rememberMe) {
+                    localStorage.setItem('mphakathi_remembered_email', loginEmail);
+                    localStorage.setItem('mphakathi_remembered_password', loginPassword);
+                } else {
+                    localStorage.removeItem('mphakathi_remembered_email');
+                    localStorage.removeItem('mphakathi_remembered_password');
+                }
+                
                 // Destructure to avoid passing password into the app's state
                 const { password, ...userToAuth } = user;
                 onAuthSuccess(userToAuth);
@@ -111,7 +135,7 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
             Hi ${newUser.fullName.split(' ')[0]},
 
             Welcome to Mphakathi, your community safety partner. 
-            We're glad to have you on board. Please take a moment to set up your emergency contacts and Voice Secret Code in the app to get the full protection Mphakathi offers.
+            Please take a moment to set up your emergency contacts and Voice Secret Code in the app to get the full protection Mphakathi offers.
 
             Stay safe,
             The Mphakathi Team
@@ -119,6 +143,9 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
             `);
             // --- END OF SIMULATION ---
 
+            // Automatically remember credentials after registration
+            localStorage.setItem('mphakathi_remembered_email', newUser.email);
+            localStorage.setItem('mphakathi_remembered_password', newUser.password);
 
             users.push(newUser);
             localStorage.setItem(USERS_DB_KEY, JSON.stringify(users));
@@ -179,7 +206,16 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
                 className="w-full bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md p-3 text-gray-900 dark:text-white focus:ring-2 focus:ring-yellow-500"
                 required
             />
-            <div className="text-right">
+            <div className="flex items-center justify-between">
+                <label className="flex items-center gap-2 cursor-pointer text-sm">
+                    <input
+                        type="checkbox"
+                        checked={rememberMe}
+                        onChange={(e) => setRememberMe(e.target.checked)}
+                        className="h-5 w-5 rounded border-gray-400 dark:border-gray-500 bg-gray-200 dark:bg-gray-700 text-yellow-500 focus:ring-yellow-500"
+                    />
+                    <span className="text-gray-700 dark:text-gray-300">Remember me</span>
+                </label>
                 <button type="button" onClick={() => setView('forgot')} className="text-sm font-semibold text-yellow-400 hover:underline">
                     Forgot Password?
                 </button>

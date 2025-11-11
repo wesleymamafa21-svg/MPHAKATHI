@@ -29,6 +29,7 @@ import ContactManagerModal from './components/ContactManagerModal';
 import RequiredActionBanner from './components/RequiredActionBanner';
 import SafetyActionSuggestion from './components/SafetyActionSuggestion';
 import MphakathiLogo from './components/MphakathiLogo';
+import ActivationPromptModal from './components/ActivationPromptModal';
 
 
 // Helper functions for audio encoding as per Gemini docs
@@ -198,11 +199,12 @@ const App: React.FC = () => {
     // Chatbot State
     const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
     const [isChatbotResponding, setIsChatbotResponding] = useState(false);
+    const [showActivationPrompt, setShowActivationPrompt] = useState(false);
     // FIX: Define state for check-in and reminder intervals.
     const [checkInInterval, setCheckInInterval] = useState<CheckInInterval>(CheckInInterval.FifteenMinutes);
     const [reminderInterval, setReminderInterval] = useState<ReminderInterval>(ReminderInterval.OneHour);
 
-
+    const hasAutoActivated = useRef(false);
     const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const notificationAudioContextRef = useRef<AudioContext | null>(null);
@@ -225,6 +227,7 @@ const App: React.FC = () => {
     const moderateConfidenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const tipBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const chatSessionRef = useRef<Chat | null>(null);
+    const alarmRef = useRef<{ stop: () => void } | null>(null);
 
 
     const isListeningRef = useRef(isListening);
@@ -512,6 +515,57 @@ Mphakathi Network has been notified.
 
     }, [emergencyContacts, location, currentUser, simulatedUsers, playNotificationSound]);
 
+    const playAlarmSound = useCallback(() => {
+        if (alarmRef.current) return; // Already playing
+
+        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
+        
+        let oscillator: OscillatorNode | null = null;
+        const gainNode = audioCtx.createGain();
+        gainNode.connect(audioCtx.destination);
+        gainNode.gain.setValueAtTime(0.4, audioCtx.currentTime); // A bit less than full volume to avoid clipping
+
+        const playBeep = () => {
+            oscillator = audioCtx.createOscillator();
+            oscillator.connect(gainNode);
+            oscillator.type = 'sawtooth';
+            oscillator.frequency.setValueAtTime(1500, audioCtx.currentTime);
+            oscillator.frequency.exponentialRampToValueAtTime(1000, audioCtx.currentTime + 0.15);
+            oscillator.start(audioCtx.currentTime);
+            oscillator.stop(audioCtx.currentTime + 0.15);
+        };
+
+        const interval = setInterval(playBeep, 400); // A rapid, repeating alarm sound
+
+        const stop = () => {
+            clearInterval(interval);
+            if (oscillator) {
+                try {
+                    oscillator.stop();
+                } catch(e) { /* already stopped */ }
+            }
+            if (audioCtx.state !== 'closed') {
+                // Fade out to prevent clicking sound
+                gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.3)
+                    .then(() => {
+                        audioCtx.close();
+                    }).catch(() => {
+                        // if context is already closed, that's fine
+                    });
+            }
+            alarmRef.current = null;
+        };
+
+        alarmRef.current = { stop };
+    }, []);
+
+    const stopAlarmSound = useCallback(() => {
+        alarmRef.current?.stop();
+    }, []);
+
 
     const resetSosState = useCallback(() => {
         if (autoSosTimerRef.current) {
@@ -526,9 +580,15 @@ Mphakathi Network has been notified.
             clearTimeout(deEscalationTimerRef.current);
             deEscalationTimerRef.current = null;
         }
+        if (moderateConfidenceTimerRef.current) {
+            clearTimeout(moderateConfidenceTimerRef.current);
+            moderateConfidenceTimerRef.current = null;
+        }
+        setModerateConfidenceTrigger(null);
         setAutoSosCountdown(null);
         setIsDeEscalationModalOpen(false);
-    }, []);
+        stopAlarmSound();
+    }, [stopAlarmSound]);
     
     const handleNewTurn = useCallback(async (text: string) => {
         const newEntry: TranscriptionEntry = {
@@ -570,7 +630,8 @@ Mphakathi Network has been notified.
     const handleEmergencyTrigger = useCallback((triggerType: string, confidence: number) => {
         if (autoSosTimerRef.current) return;
         
-        if ('vibrate' in navigator) navigator.vibrate([200, 100, 200]);
+        playAlarmSound();
+        if ('vibrate' in navigator) navigator.vibrate([500, 200, 500]);
 
         const newLogEntry: SecurityLogEntry = {
             id: crypto.randomUUID(),
@@ -616,7 +677,7 @@ Mphakathi Network has been notified.
         }
 
 
-    }, [resetSosState, location, sendEmergencyAlerts]);
+    }, [resetSosState, location, sendEmergencyAlerts, playAlarmSound]);
 
     const triggerSilentEmergencyMode = useCallback((confidence: number) => {
         if (silentActivationInProgress.current) return;
@@ -916,6 +977,15 @@ Mphakathi Network has been notified.
 
     }, [emotionState, isCalmAssistModalOpen, autoSosCountdown]);
 
+    const isOnboardingComplete = (voiceSafeCode || vscSkipped) && (emergencyContacts.length > 0 || contactsSkipped) && !!pin;
+
+    useEffect(() => {
+        // Show activation prompt once the user is authenticated and onboarded, but only once per app load.
+        if (currentUser && isOnboardingComplete && !isListeningRef.current && !hasAutoActivated.current) {
+            hasAutoActivated.current = true;
+            setShowActivationPrompt(true);
+        }
+    }, [currentUser, isOnboardingComplete]);
 
     const handleRecordingStop = () => {
         if (recordedChunksRef.current.length === 0) return;
@@ -1053,6 +1123,15 @@ If you received this, the system is working.
     const handleConsent = (allowRecording: boolean) => {
         setShowConsentModal(false);
         startSession(allowRecording);
+    };
+
+    const handleConfirmActivation = () => {
+        setShowActivationPrompt(false);
+        startSession(false);
+    };
+
+    const handleDeclineActivation = () => {
+        setShowActivationPrompt(false);
     };
 
     const handleDonation = (amount: number) => {
@@ -1439,8 +1518,6 @@ If you received this, the system is working.
         );
     }
     
-    const isOnboardingComplete = (voiceSafeCode || vscSkipped) && (emergencyContacts.length > 0 || contactsSkipped) && !!pin;
-
     if (!isOnboardingComplete) {
         return (
             <div className="relative min-h-screen flex flex-col items-center justify-center p-4">
@@ -1475,6 +1552,11 @@ If you received this, the system is working.
             `}</style>
             <div className="absolute inset-0 bg-grid-pattern opacity-10 pointer-events-none"></div>
             <AlertBanner alert={alert} onDismiss={() => setAlert(null)} />
+            <ActivationPromptModal
+                isOpen={showActivationPrompt}
+                onConfirm={handleConfirmActivation}
+                onDecline={handleDeclineActivation}
+            />
             <RequiredActionBanner
                 isVisible={currentUser !== null && isOnboardingComplete && emergencyContacts.length === 0}
                 message="Critical: No emergency contacts are set. Mphakathi cannot send alerts."

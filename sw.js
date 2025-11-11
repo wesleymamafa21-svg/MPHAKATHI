@@ -10,6 +10,7 @@ const urlsToCache = [
   '/components/Auth.tsx',
   '/components/Onboarding.tsx',
   '/components/AlertBanner.tsx',
+  '/components/ActivationPromptModal.tsx',
   '/components/AudioPlayer.tsx',
   '/components/BreathingVisualizer.tsx',
   '/components/CalmAssistModal.tsx',
