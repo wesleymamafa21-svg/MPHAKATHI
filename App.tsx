@@ -549,12 +549,16 @@ Mphakathi Network has been notified.
             }
             if (audioCtx.state !== 'closed') {
                 // Fade out to prevent clicking sound
-                gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.3)
-                    .then(() => {
-                        audioCtx.close();
-                    }).catch(() => {
-                        // if context is already closed, that's fine
-                    });
+                gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.3);
+                
+                // Schedule the context to close after the fade-out is complete.
+                setTimeout(() => {
+                    if (audioCtx.state !== 'closed') {
+                        audioCtx.close().catch(() => {
+                            // if context is already closed, that's fine
+                        });
+                    }
+                }, 300);
             }
             alarmRef.current = null;
         };
@@ -567,7 +571,7 @@ Mphakathi Network has been notified.
     }, []);
 
 
-    const resetSosState = useCallback(() => {
+    const resetSosState = useCallback((showSuccessMessage = false) => {
         if (autoSosTimerRef.current) {
             clearTimeout(autoSosTimerRef.current);
             autoSosTimerRef.current = null;
@@ -588,6 +592,12 @@ Mphakathi Network has been notified.
         setAutoSosCountdown(null);
         setIsDeEscalationModalOpen(false);
         stopAlarmSound();
+        setEmotionState({ emotion: Emotion.Neutral, intensity: 0, confidence: 0 });
+        setAcousticAnalysis(null);
+        setSafetyAction(null);
+        if(showSuccessMessage) {
+            setAlert({ level: AlertLevel.Success, message: 'SOS Alert cancelled. Mphakathi is back to normal.' });
+        }
     }, [stopAlarmSound]);
     
     const handleNewTurn = useCallback(async (text: string) => {
@@ -605,8 +615,7 @@ Mphakathi Network has been notified.
         }
 
         if (cancelSafeWord && autoSosCountdown !== null && text.toLowerCase().includes(cancelSafeWord.toLowerCase())) {
-            setAlert({ level: AlertLevel.Warning, message: "SOS Alert cancelled by safe word." });
-            resetSosState();
+            resetSosState(true);
             return;
         }
 
@@ -627,11 +636,13 @@ Mphakathi Network has been notified.
 
     }, [voiceSafeCode, cancelSafeWord, autoSosCountdown, resetSosState]);
     
-    const handleEmergencyTrigger = useCallback((triggerType: string, confidence: number) => {
+    const handleEmergencyTrigger = useCallback((triggerType: string, confidence: number, isSilent: boolean = false) => {
         if (autoSosTimerRef.current) return;
         
-        playAlarmSound();
-        if ('vibrate' in navigator) navigator.vibrate([500, 200, 500]);
+        if(!isSilent) {
+            playAlarmSound();
+            if ('vibrate' in navigator) navigator.vibrate([500, 200, 500, 200, 500]);
+        }
 
         const newLogEntry: SecurityLogEntry = {
             id: crypto.randomUUID(),
@@ -642,12 +653,12 @@ Mphakathi Network has been notified.
         };
         setSecurityLog(prev => [newLogEntry, ...prev]);
 
-        sendEmergencyAlerts(triggerType);
+        sendEmergencyAlerts(triggerType, isSilent);
 
         setAutoSosCountdown(AUTO_SOS_TIMER_SECONDS);
         countdownIntervalRef.current = setInterval(() => setAutoSosCountdown(prev => (prev ? prev - 1 : 0)), 1000);
         autoSosTimerRef.current = setTimeout(() => {
-            sendEmergencyAlerts(triggerType); // Resend for confirmation
+            sendEmergencyAlerts(triggerType, isSilent); // Resend for confirmation
             resetSosState();
         }, AUTO_SOS_TIMER_SECONDS * 1000);
 
@@ -686,48 +697,15 @@ Mphakathi Network has been notified.
         if ('vibrate' in navigator) navigator.vibrate(200);
 
         const trigger = 'Voice Secret Code';
-        const newLogEntry: SecurityLogEntry = {
-            id: crypto.randomUUID(),
-            timestamp: new Date(),
-            triggerType: trigger,
-            details: `Location: ${location?.latitude?.toFixed(4) || 'N/A'}, ${location?.longitude?.toFixed(4) || 'N/A'}`,
-            confidence: confidence,
-        };
-        setSecurityLog(prev => [newLogEntry, ...prev]);
-
-        sendEmergencyAlerts(trigger, true);
         
-        if (mediaStreamRef.current) {
-            const stream = mediaStreamRef.current;
-            const silentRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-            const chunks: Blob[] = [];
-            silentRecorder.ondataavailable = (e) => chunks.push(e.data);
-            silentRecorder.onstop = () => {
-                 const blob = new Blob(chunks, { type: 'audio/webm' });
-                 if (blob.size > 0) {
-                     setCompletedRecordings(prev => [...prev, {
-                         id: `silent_emergency_${crypto.randomUUID()}`,
-                         blob,
-                         timestamp: new Date()
-                     }]);
-                 }
-            };
-            silentRecorder.start();
-            setTimeout(() => {
-                if (silentRecorder.state === 'recording') {
-                    silentRecorder.stop();
-                }
-            }, 15000);
-        } else {
-            console.warn("Could not start silent recording: media stream not available.");
-        }
+        handleEmergencyTrigger(trigger, confidence, true);
         
         setVoiceSafeCodeMatch(null); // Reset trigger
         setTimeout(() => {
             silentActivationInProgress.current = false;
         }, 10000); // Cooldown to prevent immediate re-triggering
 
-    }, [location, sendEmergencyAlerts]);
+    }, [handleEmergencyTrigger]);
 
     const forceStopListening = useCallback((closeSession = true) => {
         if (!isListeningRef.current && !closeSession) return;
@@ -1148,8 +1126,7 @@ If you received this, the system is working.
 
     const handleDeEscalationCancel = () => {
         setPinAction(() => () => {
-            setAlert({ level: AlertLevel.Warning, message: 'SOS Alert has been cancelled.' });
-            resetSosState();
+            resetSosState(true);
         });
         setIsPinModalOpen(true);
         setPinError('');
@@ -1356,7 +1333,7 @@ If you received this, the system is working.
     };
 
     const handleCancelSosRequest = () => {
-        setPinAction(() => resetSosState);
+        setPinAction(() => () => resetSosState(true));
         setIsPinModalOpen(true);
         setPinError('');
     };
