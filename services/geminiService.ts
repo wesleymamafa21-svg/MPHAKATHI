@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, Chat } from "@google/genai";
-import { Emotion, EmotionState, Gender, CalmAssistStyle, AcousticAnalysis, SafetyAction } from '../types';
+import { Emotion, EmotionState, Gender, CalmAssistStyle, AcousticAnalysis, SafetyAction, SensitivityLevel } from '../types';
 
 if (!process.env.API_KEY) {
     throw new Error("API_KEY environment variable not set");
@@ -214,6 +214,77 @@ CONFIDENCE SCORING:
             recommended_action: 'continue_monitoring'
         };
     }
+}
+
+export interface FusedDetectionResult {
+    triggerLevel: 'none' | 'moderate' | 'high';
+    overallConfidence: number;
+    primaryTrigger: string;
+    reasoning: string;
+}
+
+/**
+ * Fuses emotion and acoustic analysis results to determine an overall distress level.
+ * @param emotionState The result from analyzeEmotion.
+ * @param acousticAnalysis The result from analyzeAcousticDistress.
+ * @param sensitivity The user-configured sensitivity level.
+ * @returns A FusedDetectionResult object with a trigger level and reasoning.
+ */
+export function fuseDetectionResults(
+    emotionState: EmotionState, 
+    acousticAnalysis: AcousticAnalysis, 
+    sensitivity: SensitivityLevel
+): FusedDetectionResult {
+    const sensitivityMultipliers = {
+        [SensitivityLevel.Low]: 0.8,
+        [SensitivityLevel.Medium]: 1.0,
+        [SensitivityLevel.High]: 1.2,
+    };
+
+    const multiplier = sensitivityMultipliers[sensitivity];
+
+    // Confidence from text-based emotion analysis, adjusted by sensitivity
+    const langConfidence = (emotionState.emotion === Emotion.Danger) 
+        ? emotionState.confidence * multiplier
+        : 0;
+    
+    // Confidence from acoustic analysis (via text), adjusted by sensitivity
+    const acousticConfidence = (acousticAnalysis.detection_confidence || 0) * multiplier;
+    const acousticTriggerStatus = acousticAnalysis.trigger_status || 'none';
+    const acousticDistressType = acousticAnalysis.distress_type || 'none';
+
+    // Determine the primary trigger by finding the highest confidence source
+    const confidenceLevels = [
+        { value: langConfidence, type: 'Danger Keyword' as const },
+        // FIX: A 'const' assertion cannot be applied to a non-literal expression.
+        // The ternary operator with a template literal is not a literal, so `as const` is invalid here.
+        // Removing 'as const' resolves the issue. The type will be inferred as string, which is correct for this logic.
+        { value: acousticConfidence, type: (acousticDistressType !== 'none' ? `Acoustic: ${acousticDistressType}` : 'Acoustic Event') },
+    ];
+    
+    const { value: overallConfidence, type: primaryTrigger } = confidenceLevels.reduce(
+        (max, current) => current.value > max.value ? current : max, 
+        { value: -1, type: 'Danger Keyword' as const }
+    );
+
+    let triggerLevel: 'none' | 'moderate' | 'high' = 'none';
+    let reasoning = 'No significant distress signals detected.';
+
+    // Determine trigger level based on combined confidence and acoustic status
+    if (overallConfidence >= 0.85 || acousticTriggerStatus === 'high') {
+        triggerLevel = 'high';
+        reasoning = `High confidence alert triggered by ${primaryTrigger} (Score: ${overallConfidence.toFixed(2)}).`;
+    } else if (overallConfidence >= 0.70 || acousticTriggerStatus === 'medium') {
+        triggerLevel = 'moderate';
+        reasoning = `Moderate confidence alert from ${primaryTrigger} (Score: ${overallConfidence.toFixed(2)}). Monitoring closely.`;
+    }
+
+    return {
+        triggerLevel,
+        overallConfidence,
+        primaryTrigger,
+        reasoning,
+    };
 }
 
 

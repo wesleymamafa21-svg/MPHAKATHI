@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Blob as GeminiBlob, Chat } from '@google/genai';
 import { User, Emotion, EmotionState, Alert, AlertLevel, TranscriptionEntry, Gender, EmergencyContact, SimulatedUser, CompletedRecording, CalmAssistStyle, SensitivityLevel, VoiceSafeCode, SecurityLogEntry, CheckInInterval, ReminderInterval, SafetyInboxThread, SafetyInboxStatus, SafetyInboxMessage, AcousticAnalysis, SafetyAction, ChatMessage } from './types';
-import { analyzeEmotion, getSafetyTip, analyzeAcousticDistress, getSafetyActions, initializeChat } from './services/geminiService';
+import { analyzeEmotion, getSafetyTip, analyzeAcousticDistress, getSafetyActions, initializeChat, fuseDetectionResults } from './services/geminiService';
 import EmotionIndicator from './components/EmotionIndicator';
 import AlertBanner from './components/AlertBanner';
 import TranscriptionLog from './components/TranscriptionLog';
@@ -840,82 +840,72 @@ Mphakathi Network has been notified.
 
     // Multi-Detection Fusion Logic
     useEffect(() => {
+        // 1. Voice Secret Code is a high-priority override
+        const safeCodeConfidence = voiceSafeCodeMatch ? voiceSafeCodeMatch.probability : 0;
+        const vscSensitivityMultipliers = {
+            [SensitivityLevel.Low]: 0.8,
+            [SensitivityLevel.Medium]: 1.0,
+            [SensitivityLevel.High]: 1.2,
+        };
+        const adjustedSafeCodeConfidence = safeCodeConfidence * vscSensitivityMultipliers[voiceSafeCodeSensitivity];
+
+        if (adjustedSafeCodeConfidence >= 0.85) {
+            setModerateConfidenceTrigger(null); // Clear any moderate trigger
+            if (moderateConfidenceTimerRef.current) {
+                clearTimeout(moderateConfidenceTimerRef.current);
+                moderateConfidenceTimerRef.current = null;
+            }
+            
+            if (!isListeningRef.current) {
+                setStatusMessage('Voice Secret Code detected. Activating Mphakathi...');
+                startSession(true).then(() => {
+                    triggerSilentEmergencyMode(adjustedSafeCodeConfidence);
+                });
+            } else {
+                triggerSilentEmergencyMode(adjustedSafeCodeConfidence);
+            }
+            return; // VSC takes precedence, stop further processing in this effect
+        }
+
+        // 2. If no VSC, fuse the emotion and acoustic signals
+        if (!acousticAnalysis) {
+            return; // Need acoustic analysis to proceed
+        }
+
+        // Clear any previous moderate trigger timeout
         if (moderateConfidenceTimerRef.current) {
             clearTimeout(moderateConfidenceTimerRef.current);
             moderateConfidenceTimerRef.current = null;
         }
 
-        // Confidence from text-based emotion analysis
-        const langConfidence = (emotionState.emotion === Emotion.Danger) ? emotionState.confidence : 0;
-        
-        // Confidence from acoustic analysis (via text)
-        const acousticConfidence = acousticAnalysis ? acousticAnalysis.detection_confidence : 0;
-        const acousticTriggerStatus = acousticAnalysis ? acousticAnalysis.trigger_status : 'none';
-        const acousticDistressType = acousticAnalysis ? acousticAnalysis.distress_type : 'none';
+        const fusedResult = fuseDetectionResults(emotionState, acousticAnalysis, sensitivity);
 
-        // Confidence from Voice Secret Code match
-        const safeCodeConfidence = voiceSafeCodeMatch ? voiceSafeCodeMatch.probability : 0;
-
-        const sensitivityMultipliers = {
-            [SensitivityLevel.Low]: 0.8,
-            [SensitivityLevel.Medium]: 1.0,
-            [SensitivityLevel.High]: 1.2,
-        };
-        
-        const adjustedAcousticConfidence = acousticConfidence * sensitivityMultipliers[sensitivity];
-        const adjustedSafeCodeConfidence = safeCodeConfidence * sensitivityMultipliers[voiceSafeCodeSensitivity];
-        
-        // Determine the primary trigger
-        const confidenceLevels = [
-            { value: langConfidence, type: 'Danger Keyword' as const },
-            { value: adjustedAcousticConfidence, type: (acousticDistressType !== 'none' ? `Acoustic: ${acousticDistressType}` : 'Acoustic Event') },
-            { value: adjustedSafeCodeConfidence, type: 'Voice Secret Code' as const },
-        ];
-        
-        const { value: overallConfidence, type: triggerType } = confidenceLevels.reduce((max, current) => current.value > max.value ? current : max, { value: -1, type: 'Danger Keyword' as const });
-
-        const isCalm = emotionState.intensity < 40 && ![Emotion.Danger, Emotion.Angry, Emotion.Fearful].includes(emotionState.emotion) && emotionState.confidence < 0.5 && acousticTriggerStatus === 'none';
-
-        // HIGH CONFIDENCE
-        if (overallConfidence >= 0.85 || acousticTriggerStatus === 'high') {
+        if (fusedResult.triggerLevel === 'high') {
             setModerateConfidenceTrigger(null);
-            
-            if (triggerType === 'Voice Secret Code') {
-                 if (!isListeningRef.current) {
-                    setStatusMessage('Voice Secret Code detected. Activating Mphakathi...');
-                    startSession(true).then(() => {
-                        triggerSilentEmergencyMode(overallConfidence);
-                    });
-                } else {
-                    triggerSilentEmergencyMode(overallConfidence);
-                }
-                return;
-            }
-
             setIsCalmAssistModalOpen(false);
             if (deEscalationTimerRef.current) clearTimeout(deEscalationTimerRef.current);
             if (isDeEscalationModalOpen) setIsDeEscalationModalOpen(false);
-            
-            handleEmergencyTrigger(triggerType, overallConfidence);
-
-        // MODERATE CONFIDENCE
-        } else if (overallConfidence >= 0.70 || acousticTriggerStatus === 'medium') {
-            if (!moderateConfidenceTrigger) {
-                setModerateConfidenceTrigger({ confidence: overallConfidence, triggerType });
+            handleEmergencyTrigger(fusedResult.primaryTrigger, fusedResult.overallConfidence);
+        } else if (fusedResult.triggerLevel === 'moderate') {
+            if (!moderateConfidenceTrigger) { // Only set the timer if not already set
+                setModerateConfidenceTrigger({ confidence: fusedResult.overallConfidence, triggerType: fusedResult.primaryTrigger });
                 moderateConfidenceTimerRef.current = setTimeout(() => {
+                    // Re-evaluate after 3 seconds with the latest emotion state
                     const latestEmotionState = emotionStateRef.current;
                     const latestLangConfidence = latestEmotionState.emotion === Emotion.Danger ? latestEmotionState.confidence : 0;
-                    
                     if (latestLangConfidence >= 0.70) {
                          handleEmergencyTrigger('Danger Keyword', latestLangConfidence);
                     }
                     setModerateConfidenceTrigger(null);
                 }, 3000);
             }
-        } else {
-            // LOW CONFIDENCE
+        } else { // 'none'
             setModerateConfidenceTrigger(null);
         }
+
+        // 3. De-escalation logic (if an SOS is already counting down)
+        const acousticTriggerStatus = acousticAnalysis.trigger_status || 'none';
+        const isCalm = emotionState.intensity < 40 && ![Emotion.Danger, Emotion.Angry, Emotion.Fearful].includes(emotionState.emotion) && emotionState.confidence < 0.5 && acousticTriggerStatus === 'none';
 
         if (isCalm && autoSosTimerRef.current) {
             if (!deEscalationTimerRef.current) {
@@ -936,7 +926,7 @@ Mphakathi Network has been notified.
             clearTimeout(deEscalationTimerRef.current);
             deEscalationTimerRef.current = null;
         }
-        
+
     }, [emotionState, acousticAnalysis, voiceSafeCodeMatch, voiceSafeCodeSensitivity, sensitivity, isDeEscalationModalOpen, handleEmergencyTrigger, triggerSilentEmergencyMode, startSession, moderateConfidenceTrigger]);
 
     // Effect for Calm Assist
@@ -1398,82 +1388,95 @@ If you received this, the system is working.
         }
     };
 
-    const renderMainView = () => (
-      <div className="w-full max-w-4xl flex flex-col items-center justify-center space-y-6 animate-fade-in">
-        <MphakathiLogo />
-        <EmotionIndicator emotionState={emotionState} isListening={isListening} isCountingDown={autoSosCountdown !== null} />
-        <div className="text-center">
-            <p className="text-lg md:text-xl text-gray-600 dark:text-gray-400 mt-2">{statusMessage}</p>
-             {moderateConfidenceTrigger && (
-                <p className="text-sm text-yellow-400 animate-pulse">Moderate distress detected. Monitoring closely...</p>
-            )}
-        </div>
-        
-        {autoSosCountdown !== null && (
-            <div className="p-4 bg-red-900/50 border-2 border-red-500 rounded-lg text-center">
-                <p className="text-xl text-red-300 font-bold">SOS in {autoSosCountdown}s</p>
-                <button onClick={handleCancelSosRequest} className="mt-2 px-4 py-1 bg-red-600 hover:bg-red-700 rounded-full text-sm">Cancel</button>
+    const renderMainView = () => {
+        const isAnalyzing = moderateConfidenceTrigger !== null || autoSosCountdown !== null;
+    
+        return (
+            <div className="w-full max-w-4xl flex flex-col items-center justify-center space-y-6 animate-fade-in">
+                <MphakathiLogo />
+                <EmotionIndicator emotionState={emotionState} isListening={isListening} isCountingDown={autoSosCountdown !== null} />
+                <div className="text-center">
+                    <p className="text-lg md:text-xl text-gray-600 dark:text-gray-400 mt-2 flex justify-center items-center gap-2">
+                        {isAnalyzing && (
+                            <span className="relative flex h-3 w-3" title="Analyzing potential threat...">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-3 w-3 bg-yellow-500"></span>
+                            </span>
+                        )}
+                        <span>{statusMessage}</span>
+                    </p>
+                    {moderateConfidenceTrigger && (
+                        <p className="text-sm text-yellow-400 animate-pulse">Moderate distress detected. Monitoring closely...</p>
+                    )}
+                </div>
+                
+                {autoSosCountdown !== null && (
+                    <div className="p-4 bg-red-900/50 border-2 border-red-500 rounded-lg text-center">
+                        <p className="text-sm text-red-300 font-semibold">High Threat Detected: Analyzing...</p>
+                        <p className="text-xl text-red-300 font-bold">SOS in {autoSosCountdown}s</p>
+                        <button onClick={handleCancelSosRequest} className="mt-2 px-4 py-1 bg-red-600 hover:bg-red-700 rounded-full text-sm">Cancel</button>
+                    </div>
+                )}
+    
+                <div className="w-full flex flex-col md:flex-row justify-center items-center gap-4">
+                    {!isListening ? (
+                        <button
+                            onClick={() => {
+                                if (!currentUser?.gender) {
+                                    setAlert({ level: AlertLevel.Warning, message: 'Please complete your profile in Settings first.' });
+                                    setView('settings');
+                                    return;
+                                }
+                                setShowConsentModal(true);
+                            }}
+                            className="w-full md:w-auto px-8 py-4 bg-yellow-500 hover:bg-yellow-600 text-black font-bold text-xl rounded-full shadow-lg transition-transform transform hover:scale-105"
+                        >
+                            Activate
+                        </button>
+                    ) : (
+                        <button
+                            onClick={stopListening}
+                            className="w-full md:w-auto px-8 py-4 bg-red-600 hover:bg-red-700 text-white font-bold text-xl rounded-full shadow-lg transition-transform transform hover:scale-105"
+                        >
+                            Deactivate
+                        </button>
+                    )}
+                    <button
+                        onClick={() => setIsSOSModalOpen(true)}
+                        className="w-full md:w-auto px-8 py-4 bg-red-600 hover:bg-red-700 text-white font-bold text-xl rounded-full shadow-lg transition-transform transform hover:scale-105"
+                    >
+                        Send SOS
+                    </button>
+                </div>
+    
+                <SafetyActionSuggestion action={safetyAction} />
+                <TranscriptionLog entries={transcriptionLog} liveTranscript={liveTranscript} emptyMessage="Activate to see transcription here..." />
+                
+                <div className="absolute top-4 right-4 flex gap-3">
+                     <button onClick={() => setView('settings')} className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors" aria-label="Open Settings">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066 2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                     </button>
+                     <button onClick={() => setView('help')} className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors" aria-label="Open Help">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                     </button>
+                     <button onClick={() => setView('donate')} className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors" aria-label="Donate">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" /></svg>
+                     </button>
+                     <SafetyInboxIcon unreadCount={unreadInboxCount} onClick={handleViewInbox} />
+                     <button onClick={() => setView('profile')} className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors" aria-label="Open Profile">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                     </button>
+                </div>
+                <button
+                    onClick={() => setView('gemini-chat')}
+                    className="fixed bottom-6 right-6 bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-full shadow-lg z-20 transition-transform transform hover:scale-110"
+                    aria-label="Open AI Assistant"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+                </button>
             </div>
-        )}
-
-        <div className="w-full flex flex-col md:flex-row justify-center items-center gap-4">
-            {!isListening ? (
-                <button
-                    onClick={() => {
-                        if (!currentUser?.gender) {
-                            setAlert({ level: AlertLevel.Warning, message: 'Please complete your profile in Settings first.' });
-                            setView('settings');
-                            return;
-                        }
-                        setShowConsentModal(true);
-                    }}
-                    className="w-full md:w-auto px-8 py-4 bg-yellow-500 hover:bg-yellow-600 text-black font-bold text-xl rounded-full shadow-lg transition-transform transform hover:scale-105"
-                >
-                    Activate
-                </button>
-            ) : (
-                <button
-                    onClick={stopListening}
-                    className="w-full md:w-auto px-8 py-4 bg-red-600 hover:bg-red-700 text-white font-bold text-xl rounded-full shadow-lg transition-transform transform hover:scale-105"
-                >
-                    Deactivate
-                </button>
-            )}
-            <button
-                onClick={() => setIsSOSModalOpen(true)}
-                className="w-full md:w-auto px-8 py-4 bg-red-600 hover:bg-red-700 text-white font-bold text-xl rounded-full shadow-lg transition-transform transform hover:scale-105"
-            >
-                Send SOS
-            </button>
-        </div>
-
-        <SafetyActionSuggestion action={safetyAction} />
-        <TranscriptionLog entries={transcriptionLog} liveTranscript={liveTranscript} emptyMessage="Activate to see transcription here..." />
-        
-        <div className="absolute top-4 right-4 flex gap-3">
-             <button onClick={() => setView('settings')} className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors" aria-label="Open Settings">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066 2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-             </button>
-             <button onClick={() => setView('help')} className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors" aria-label="Open Help">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-             </button>
-             <button onClick={() => setView('donate')} className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors" aria-label="Donate">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" /></svg>
-             </button>
-             <SafetyInboxIcon unreadCount={unreadInboxCount} onClick={handleViewInbox} />
-             <button onClick={() => setView('profile')} className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors" aria-label="Open Profile">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-             </button>
-        </div>
-        <button
-            onClick={() => setView('gemini-chat')}
-            className="fixed bottom-6 right-6 bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-full shadow-lg z-20 transition-transform transform hover:scale-110"
-            aria-label="Open AI Assistant"
-        >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
-        </button>
-      </div>
-    );
+        );
+    };
     
     const activeChatThread = safetyInbox.find(t => t.id === activeChatThreadId);
 
