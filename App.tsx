@@ -209,6 +209,7 @@ const App: React.FC = () => {
     // Chatbot State
     const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
     const [isChatbotResponding, setIsChatbotResponding] = useState(false);
+    const [isAnonymousMode, setIsAnonymousMode] = useState(false);
     const [showActivationPrompt, setShowActivationPrompt] = useState(false);
     const [checkInInterval, setCheckInInterval] = useState<CheckInInterval>(CheckInInterval.FifteenMinutes);
     const [reminderInterval, setReminderInterval] = useState<ReminderInterval>(ReminderInterval.OneHour);
@@ -1472,6 +1473,29 @@ If you received this, the system is working.
         }
     };
 
+    const handleStartAnonymousChat = () => {
+        setIsAnonymousMode(true);
+        // Re-initialize chat session without location for anonymity
+        chatSessionRef.current = initializeChat(null);
+        setChatMessages([{
+            id: crypto.randomUUID(),
+            role: 'system',
+            text: 'Anonymous Reporting mode is active. Your location and personal details are not shared in this session. This conversation may be reviewed for safety purposes.',
+            timestamp: new Date(),
+        }]);
+    };
+
+    const handleGeminiChatBack = () => {
+        if (isAnonymousMode) {
+            setIsAnonymousMode(false);
+            // Re-initialize the normal chat session with location
+            chatSessionRef.current = initializeChat(location);
+            setChatMessages([]); // Clear anonymous chat history
+        }
+        setView('main');
+    };
+
+
     const renderMainView = () => {
         const isAnalyzing = moderateConfidenceTrigger !== null || autoSosCountdown !== null;
     
@@ -1768,7 +1792,9 @@ If you received this, the system is working.
                         messages={chatMessages}
                         onSendMessage={handleSendChatMessage}
                         isResponding={isChatbotResponding}
-                        onBack={() => setView('main')}
+                        onBack={handleGeminiChatBack}
+                        isAnonymous={isAnonymousMode}
+                        onStartAnonymousChat={handleStartAnonymousChat}
                     />
                 )}
                  {view === 'payment-processing' && (
