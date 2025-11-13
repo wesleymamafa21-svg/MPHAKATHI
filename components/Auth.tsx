@@ -192,6 +192,17 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
         }
     };
 
+    const handleAnonymousLogin = () => {
+        const anonymousUser: User = {
+            id: `anon_${crypto.randomUUID()}`,
+            fullName: 'Anonymous User',
+            email: '', // No email for anonymous users
+            gender: Gender.PreferNotToSay,
+            isSurvivor: false,
+        };
+        onAuthSuccess(anonymousUser);
+    };
+
     const renderLogin = () => (
          <form onSubmit={handleLogin} className="space-y-4">
             <h2 className="text-2xl font-bold text-yellow-400 text-center">Welcome Back</h2>
@@ -323,6 +334,20 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
             
             <button type="submit" className="w-full px-4 py-3 bg-yellow-500 hover:bg-yellow-600 text-black rounded-full transition-colors font-bold text-lg">
                 Register
+            </button>
+
+            <div className="flex items-center my-4">
+                <div className="flex-grow border-t border-gray-300 dark:border-gray-600"></div>
+                <span className="flex-shrink mx-4 text-gray-500 dark:text-gray-400 text-sm">OR</span>
+                <div className="flex-grow border-t border-gray-300 dark:border-gray-600"></div>
+            </div>
+
+            <button 
+                type="button" 
+                onClick={handleAnonymousLogin}
+                className="w-full px-4 py-3 bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 text-gray-800 dark:text-white rounded-full transition-colors font-semibold"
+            >
+                Continue Anonymously
             </button>
 
             <p className="text-center text-sm text-gray-500 dark:text-gray-400 pt-2">

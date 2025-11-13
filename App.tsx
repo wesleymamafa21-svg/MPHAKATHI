@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Blob as GeminiBlob, Chat } from '@google/genai';
-import { User, Emotion, EmotionState, Alert, AlertLevel, TranscriptionEntry, Gender, EmergencyContact, SimulatedUser, CompletedRecording, CalmAssistStyle, SensitivityLevel, VoiceSafeCode, SecurityLogEntry, CheckInInterval, ReminderInterval, SafetyInboxThread, SafetyInboxStatus, SafetyInboxMessage, AcousticAnalysis, SafetyAction, ChatMessage } from './types';
+import { User, Emotion, EmotionState, Alert, AlertLevel, TranscriptionEntry, Gender, EmergencyContact, SimulatedUser, CompletedRecording, CalmAssistStyle, SensitivityLevel, VoiceSafeCode, SecurityLogEntry, CheckInInterval, ReminderInterval, SafetyInboxThread, SafetyInboxStatus, SafetyInboxMessage, AcousticAnalysis, SafetyAction, ChatMessage, AutoActivationSchedule, DayOfWeek } from './types';
+// FIX: Module '"./services/geminiService"' has no exported member 'analyzeAcoustics'. The correct name is 'analyzeAcousticDistress'.
 import { analyzeEmotion, getSafetyTip, analyzeAcousticDistress, getSafetyActions, initializeChat, fuseDetectionResults } from './services/geminiService';
 import EmotionIndicator from './components/EmotionIndicator';
 import AlertBanner from './components/AlertBanner';
@@ -113,28 +114,37 @@ const RecordingConsentModal: React.FC<{
     return (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-2xl p-6 w-full max-w-md border border-gray-200 dark:border-gray-600">
-                <h2 className="text-2xl font-bold text-yellow-400 mb-4">Record Audio?</h2>
+                <h2 className="text-2xl font-bold text-yellow-400 mb-4">Activate Mphakathi</h2>
                 <p className="text-gray-700 dark:text-gray-300 mb-6">
-                    You can optionally save a recording of this session to your device. Recordings are saved in 30-minute segments and can be downloaded from your profile.
+                   Choose an activation mode. You can optionally save a recording of this session to your device.
                 </p>
-                <div className="flex justify-end gap-4 flex-wrap">
-                    <button
-                        onClick={onClose}
-                        className="px-6 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-white font-semibold rounded-full transition-colors"
-                    >
-                        Close
-                    </button>
-                    <button
+                <div className="flex flex-col justify-end gap-2">
+                     <button
                         onClick={() => onConsent(false)}
-                        className="px-6 py-2 bg-gray-300 dark:bg-gray-600 hover:bg-gray-400 dark:hover:bg-gray-500 text-gray-800 dark:text-white font-semibold rounded-full transition-colors"
+                        className="px-6 py-3 bg-gray-300 dark:bg-gray-600 hover:bg-gray-400 dark:hover:bg-gray-500 text-gray-800 dark:text-white font-semibold rounded-full transition-colors w-full"
                     >
                         Activate Only
                     </button>
                     <button
                         onClick={() => onConsent(true)}
-                        className="px-6 py-2 bg-green-600 hover:bg-green-700 text-white font-bold rounded-full transition-colors shadow-lg"
+                        className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-full transition-colors shadow-lg w-full"
                     >
-                        Record & Activate
+                        Activate and Record
+                    </button>
+                    <button
+                        onClick={() => {
+                            onClose();
+                            (window as any).setView('settings'); // A bit of a hack to get around prop drilling for this one-off action
+                        }}
+                        className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-full transition-colors w-full"
+                    >
+                        Set Auto-Activate (Listen Only)
+                    </button>
+                    <button
+                        onClick={onClose}
+                        className="px-6 py-3 bg-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 font-semibold rounded-full transition-colors w-full"
+                    >
+                        Close
                     </button>
                 </div>
             </div>
@@ -200,9 +210,11 @@ const App: React.FC = () => {
     const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
     const [isChatbotResponding, setIsChatbotResponding] = useState(false);
     const [showActivationPrompt, setShowActivationPrompt] = useState(false);
-    // FIX: Define state for check-in and reminder intervals.
     const [checkInInterval, setCheckInInterval] = useState<CheckInInterval>(CheckInInterval.FifteenMinutes);
     const [reminderInterval, setReminderInterval] = useState<ReminderInterval>(ReminderInterval.OneHour);
+    // Auto-Activation State
+    const [isAutoActivationEnabled, setIsAutoActivationEnabled] = useState(false);
+    const [autoActivationSchedules, setAutoActivationSchedules] = useState<AutoActivationSchedule[]>([]);
 
     const hasAutoActivated = useRef(false);
     const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
@@ -228,10 +240,18 @@ const App: React.FC = () => {
     const tipBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const chatSessionRef = useRef<Chat | null>(null);
     const alarmRef = useRef<{ stop: () => void } | null>(null);
+    const lastTriggeredTimeRef = useRef<string | null>(null);
 
+    // FIX: Moved isOnboardingComplete declaration before its first usage to resolve block-scoped variable error.
+    const isOnboardingComplete = (voiceSafeCode || vscSkipped) && (emergencyContacts.length > 0 || contactsSkipped) && !!pin;
 
     const isListeningRef = useRef(isListening);
     isListeningRef.current = isListening;
+
+    // A hack to allow the modal to change the view without excessive prop drilling
+    useEffect(() => {
+        (window as any).setView = setView;
+    }, []);
 
     useEffect(() => {
         const root = window.document.documentElement;
@@ -371,6 +391,26 @@ const App: React.FC = () => {
             const savedVscSkipped = localStorage.getItem('mphakathi_vsc_skipped');
             if (savedVscSkipped) setVscSkipped(JSON.parse(savedVscSkipped));
 
+            const savedAutoActivateEnabled = localStorage.getItem('mphakathi_auto_activate_enabled');
+            if (savedAutoActivateEnabled) setIsAutoActivationEnabled(JSON.parse(savedAutoActivateEnabled));
+            
+            const savedSchedules = localStorage.getItem('mphakathi_auto_activation_schedules');
+            if (savedSchedules) {
+                setAutoActivationSchedules(JSON.parse(savedSchedules));
+            } else {
+                // Migration from old format if exists
+                const savedOldSchedule = localStorage.getItem('mphakathi_auto_activation_schedule');
+                if (savedOldSchedule) {
+                    try {
+                        const parsedOld = JSON.parse(savedOldSchedule);
+                        // Check if it's the old object format and has content
+                        if (parsedOld && typeof parsedOld === 'object' && !Array.isArray(parsedOld) && parsedOld.time && parsedOld.days) {
+                            setAutoActivationSchedules([parsedOld]);
+                        }
+                    } catch (e) { console.error('Error migrating schedule', e); }
+                    localStorage.removeItem('mphakathi_auto_activation_schedule');
+                }
+            }
 
         } catch (error) {
             console.error("Failed to load data from localStorage", error);
@@ -396,10 +436,12 @@ const App: React.FC = () => {
             localStorage.setItem('mphakathi_unread_inbox', JSON.stringify(unreadInboxCount));
             localStorage.setItem('mphakathi_contacts_skipped', JSON.stringify(contactsSkipped));
             localStorage.setItem('mphakathi_vsc_skipped', JSON.stringify(vscSkipped));
+            localStorage.setItem('mphakathi_auto_activate_enabled', JSON.stringify(isAutoActivationEnabled));
+            localStorage.setItem('mphakathi_auto_activation_schedules', JSON.stringify(autoActivationSchedules));
         } catch (error) {
              console.error("Failed to save settings to localStorage", error);
         }
-    }, [currentUser, transcriptionLog, calmAssistStyle, sensitivity, voiceSafeCode, cancelSafeWord, voiceSafeCodeSensitivity, securityLog, checkInInterval, reminderInterval, safetyInbox, unreadInboxCount, contactsSkipped, vscSkipped]);
+    }, [currentUser, transcriptionLog, calmAssistStyle, sensitivity, voiceSafeCode, cancelSafeWord, voiceSafeCodeSensitivity, securityLog, checkInInterval, reminderInterval, safetyInbox, unreadInboxCount, contactsSkipped, vscSkipped, isAutoActivationEnabled, autoActivationSchedules]);
 
 
     const createBlob = (data: Float32Array): GeminiBlob => {
@@ -838,6 +880,50 @@ Mphakathi Network has been notified.
         }
     }, [handleNewTurn, forceStopListening, intervalToMs, checkInInterval, reminderInterval, voiceSafeCode]);
 
+    // Effect for automatic activation
+    useEffect(() => {
+        if (!isAutoActivationEnabled || autoActivationSchedules.length === 0 || !currentUser || !isOnboardingComplete) {
+            return;
+        }
+
+        const dayMap: { [key: number]: DayOfWeek } = {
+            0: DayOfWeek.Sunday,
+            1: DayOfWeek.Monday,
+            2: DayOfWeek.Tuesday,
+            3: DayOfWeek.Wednesday,
+            4: DayOfWeek.Thursday,
+            5: DayOfWeek.Friday,
+            6: DayOfWeek.Saturday,
+        };
+
+        const checkTime = () => {
+            const now = new Date();
+            const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+            const currentDay = dayMap[now.getDay()];
+
+            if (lastTriggeredTimeRef.current === currentTime) {
+                return; // Prevent re-triggering in the same minute
+            }
+
+            const shouldActivate = autoActivationSchedules.some(schedule => 
+                schedule.time === currentTime && schedule.days.includes(currentDay)
+            );
+
+            if (shouldActivate && !isListeningRef.current) {
+                console.log(`Auto-activating Mphakathi at ${currentTime} on a ${currentDay}`);
+                setStatusMessage(`Auto-activating at ${currentTime}...`);
+                startSession(false); // Activate in "Listen Only" mode
+                lastTriggeredTimeRef.current = currentTime;
+            }
+        };
+        
+        const intervalId = setInterval(checkTime, 30000); // Check every 30 seconds for accuracy
+
+        return () => {
+            clearInterval(intervalId);
+        };
+    }, [isAutoActivationEnabled, autoActivationSchedules, currentUser, isOnboardingComplete, startSession]);
+
     // Multi-Detection Fusion Logic
     useEffect(() => {
         // 1. Voice Secret Code is a high-priority override
@@ -944,8 +1030,6 @@ Mphakathi Network has been notified.
         }
 
     }, [emotionState, isCalmAssistModalOpen, autoSosCountdown]);
-
-    const isOnboardingComplete = (voiceSafeCode || vscSkipped) && (emergencyContacts.length > 0 || contactsSkipped) && !!pin;
 
     useEffect(() => {
         // Show activation prompt once the user is authenticated and onboarded, but only once per app load.
@@ -1645,6 +1729,10 @@ If you received this, the system is working.
                         onBack={() => setView('main')}
                         theme={theme}
                         onThemeChange={setTheme}
+                        isAutoActivationEnabled={isAutoActivationEnabled}
+                        onAutoActivationToggle={setIsAutoActivationEnabled}
+                        autoActivationSchedules={autoActivationSchedules}
+                        onAutoActivationSchedulesChange={setAutoActivationSchedules}
                     />
                  )}
                 {view === 'help' && (

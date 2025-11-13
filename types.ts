@@ -55,6 +55,16 @@ export enum SafetyInboxStatus {
     NoResponse = 'No Response',
 }
 
+export enum DayOfWeek {
+    Sunday = 'Sunday',
+    Monday = 'Monday',
+    Tuesday = 'Tuesday',
+    Wednesday = 'Wednesday',
+    Thursday = 'Thursday',
+    Friday = 'Friday',
+    Saturday = 'Saturday',
+}
+
 export interface User {
     id: string;
     fullName: string;
@@ -150,4 +160,9 @@ export interface ChatMessage {
   text: string;
   timestamp: Date;
   groundingChunks?: any[]; 
+}
+
+export interface AutoActivationSchedule {
+    time: string | null;
+    days: DayOfWeek[];
 }

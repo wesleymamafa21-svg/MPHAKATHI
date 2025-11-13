@@ -7,6 +7,44 @@ if (!process.env.API_KEY) {
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * A wrapper for the Gemini API's generateContent method that includes
+ * a retry mechanism with exponential backoff for transient errors.
+ * @param params The parameters for the generateContent call.
+ * @returns The response from the API.
+ */
+async function generateContentWithRetry(params: any) {
+    const maxRetries = 3;
+    let delay = 1000; // start with 1 second
+
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            const response = await ai.models.generateContent(params);
+            return response;
+        } catch (error: any) {
+            console.error(`Gemini API call failed (attempt ${i + 1}/${maxRetries}):`, error);
+            // Check for common transient error messages
+            const errorMessage = error.toString().toLowerCase();
+            const isRetryable = errorMessage.includes('overloaded') || 
+                                errorMessage.includes('unavailable') ||
+                                errorMessage.includes('503');
+
+            if (i < maxRetries - 1 && isRetryable) {
+                console.log(`Retrying in ${delay / 1000}s...`);
+                await sleep(delay);
+                delay *= 2; // Exponential backoff
+            } else {
+                throw error; // Rethrow if not a retryable error or max retries reached
+            }
+        }
+    }
+    // This should not be reached if the loop is correct, but as a fallback.
+    throw new Error("Gemini API call failed after multiple retries.");
+}
+
+
 export function initializeChat(location: { latitude: number; longitude: number } | null): Chat {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const chat = ai.chats.create({
@@ -97,7 +135,7 @@ Pay extremely close attention to these keywords and their variations across all 
 Provide the output strictly in JSON format based on the provided schema. The 'confidence' score is critical for the app's response logic.`;
 
     try {
-        const response = await ai.models.generateContent({
+        const response = await generateContentWithRetry({
             model: "gemini-2.5-flash",
             contents: `Analyze the following transcribed text for emotional distress: "${text}"`,
             config: {
@@ -190,7 +228,7 @@ CONFIDENCE SCORING:
     }
 
     try {
-        const response = await ai.models.generateContent({
+        const response = await generateContentWithRetry({
             model: "gemini-2.5-flash",
             contents: `Analyze the following transcribed text for acoustic signs of distress: "${text}"`,
             config: {
@@ -317,7 +355,7 @@ export async function getSafetyActions(emotionState: EmotionState, acousticAnaly
 Provide the output strictly in JSON format based on the provided schema. The suggestion must be a single, short sentence.`;
     
     try {
-        const response = await ai.models.generateContent({
+        const response = await generateContentWithRetry({
             model: "gemini-2.5-flash",
             contents: `Based on this data: Emotion - ${emotionState.emotion} (Intensity: ${emotionState.intensity}), Acoustic Distress - ${acousticAnalysis.distress_type} (Confidence: ${acousticAnalysis.detection_confidence}), provide a relevant safety action.`,
             config: {
@@ -343,7 +381,7 @@ export async function getSafetyTip(gender: Gender, isSurvivor: boolean): Promise
             ? "Crucially, the user is a survivor of gender-based violence, so the tip must be trauma-informed, focusing on empowerment, grounding techniques, setting boundaries, or recognizing personal triggers rather than generic stranger-danger advice."
             : "";
         
-        const response = await ai.models.generateContent({
+        const response = await generateContentWithRetry({
             model: "gemini-2.5-flash",
             contents: `Act as a safety and empowerment coach. Provide a single, concise, practical, and encouraging safety tip for a ${gender} to help them avoid or navigate dangerous situations, particularly related to gender-based violence. ${survivorContext} The tip should be empowering, not fear-mongering. Make it short and impactful.`
         });
@@ -356,7 +394,7 @@ export async function getSafetyTip(gender: Gender, isSurvivor: boolean): Promise
 
 export async function generateCalmingMessage(style: CalmAssistStyle): Promise<string> {
     try {
-        const response = await ai.models.generateContent({
+        const response = await generateContentWithRetry({
             model: "gemini-2.5-flash",
             contents: `Act as a compassionate de-escalation coach. Provide a single, short, calming message for someone feeling stressed or angry. The tone should be "${style}". For example, if the style is 'Soft and soothing', say "It's okay to feel this way. Let's take a moment to breathe." Do not include any preamble like "Of course..." or extra formatting like quotation marks.`
         });

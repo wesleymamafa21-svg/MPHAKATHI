@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { User, Gender, CalmAssistStyle, SensitivityLevel, CheckInInterval, ReminderInterval } from '../types';
+import { User, Gender, CalmAssistStyle, SensitivityLevel, CheckInInterval, ReminderInterval, AutoActivationSchedule, DayOfWeek } from '../types';
 
 const PinManager: React.FC<{onSetPin: (pin: string) => void; pinIsSet: boolean}> = ({ onSetPin, pinIsSet }) => {
     const [newPin, setNewPin] = useState('');
@@ -63,6 +63,10 @@ interface SettingsProps {
     onBack: () => void;
     theme: 'light' | 'dark';
     onThemeChange: (theme: 'light' | 'dark') => void;
+    isAutoActivationEnabled: boolean;
+    onAutoActivationToggle: (enabled: boolean) => void;
+    autoActivationSchedules: AutoActivationSchedule[];
+    onAutoActivationSchedulesChange: (schedules: AutoActivationSchedule[]) => void;
 }
 
 const Settings: React.FC<SettingsProps> = ({ 
@@ -70,11 +74,54 @@ const Settings: React.FC<SettingsProps> = ({
     calmAssistStyle, onCalmAssistStyleChange, sensitivity, onSensitivityChange, 
     checkInInterval, onCheckInIntervalChange, reminderInterval, onReminderIntervalChange, 
     onManageVoiceCode, canInstall, onInstallApp, onLogout, onBack,
-    theme, onThemeChange
+    theme, onThemeChange,
+    isAutoActivationEnabled, onAutoActivationToggle,
+    autoActivationSchedules, onAutoActivationSchedulesChange
 }) => {
+
+    const [newSchedule, setNewSchedule] = useState<AutoActivationSchedule>({ time: '', days: [] });
     
     const handleUserNameChange = (name: string) => {
         onUserUpdate({ ...user, fullName: name });
+    };
+
+    const weekDays = [DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday, DayOfWeek.Saturday, DayOfWeek.Sunday];
+
+    const handleNewScheduleTimeChange = (time: string) => {
+        setNewSchedule({ ...newSchedule, time });
+    };
+
+    const handleNewScheduleDayToggle = (day: DayOfWeek) => {
+        const currentDays = newSchedule.days;
+        const newDays = currentDays.includes(day)
+            ? currentDays.filter(d => d !== day)
+            : [...currentDays, day];
+        setNewSchedule({ ...newSchedule, days: newDays });
+    };
+
+    const handleNewScheduleEverydayToggle = () => {
+        const allDaysSelected = newSchedule.days.length === weekDays.length;
+        const newDays = allDaysSelected ? [] : weekDays;
+        setNewSchedule({ ...newSchedule, days: newDays });
+    };
+
+    const handleAddSchedule = () => {
+        if (!newSchedule.time || newSchedule.days.length === 0) return;
+        onAutoActivationSchedulesChange([...autoActivationSchedules, newSchedule]);
+        setNewSchedule({ time: '', days: [] }); // Reset form
+    };
+
+    const handleRemoveSchedule = (indexToRemove: number) => {
+        onAutoActivationSchedulesChange(
+            autoActivationSchedules.filter((_, index) => index !== indexToRemove)
+        );
+    };
+
+    const formatDays = (days: DayOfWeek[]): string => {
+        if (days.length === 7) return 'Everyday';
+        if (days.length === 0) return 'No days selected';
+        const sortedDays = weekDays.filter(day => days.includes(day));
+        return sortedDays.map(d => d.substring(0, 3)).join(', ');
     };
 
     return (
@@ -127,6 +174,86 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
 
             <PinManager pinIsSet={pinIsSet} onSetPin={onSetPin} />
+
+            <div className="w-full bg-white dark:bg-gray-800/50 p-6 rounded-lg mb-6 shadow-sm">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-xl font-semibold text-yellow-400">Automatic Activation</h3>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" checked={isAutoActivationEnabled} onChange={(e) => onAutoActivationToggle(e.target.checked)} className="sr-only peer" />
+                        <div className="w-11 h-6 bg-gray-200 dark:bg-gray-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-yellow-300 dark:peer-focus:ring-yellow-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-yellow-500"></div>
+                    </label>
+                </div>
+                <p className="text-gray-600 dark:text-gray-400 mb-4">App will automatically activate 'Listen Only' mode at the set times.</p>
+                
+                <div className={`space-y-4 transition-opacity ${isAutoActivationEnabled ? 'opacity-100' : 'opacity-50 pointer-events-none'}`}>
+                    <div>
+                        <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-2">Active Schedules</h4>
+                        {autoActivationSchedules.length > 0 ? (
+                            <ul className="space-y-2">
+                                {autoActivationSchedules.map((schedule, index) => (
+                                    <li key={index} className="flex justify-between items-center bg-gray-100 dark:bg-gray-900/50 p-3 rounded-md">
+                                        <div>
+                                            <span className="font-mono text-lg font-semibold text-white">{schedule.time}</span>
+                                            <span className="text-gray-400 ml-3">{formatDays(schedule.days)}</span>
+                                        </div>
+                                        <button onClick={() => handleRemoveSchedule(index)} className="px-2 py-1 text-red-400 hover:text-red-300 font-bold text-xl rounded-full hover:bg-red-500/10">
+                                            &times;
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : (
+                            <p className="text-gray-500 italic text-center py-2">No schedules set.</p>
+                        )}
+                    </div>
+                    
+                    <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                        <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-4">Add a New Schedule</h4>
+                        <div className="flex items-center gap-4 mb-4">
+                            <label htmlFor="activation-time" className="w-16 text-gray-700 dark:text-gray-300 font-semibold">Time:</label>
+                            <input
+                                type="time"
+                                id="activation-time"
+                                value={newSchedule.time || ''}
+                                onChange={(e) => handleNewScheduleTimeChange(e.target.value || '')}
+                                className="flex-grow bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md p-2 text-gray-900 dark:text-white focus:ring-2 focus:ring-yellow-500"
+                            />
+                        </div>
+
+                        <div className="pt-2">
+                            <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-2">Repeat on Days:</h4>
+                            <div className="flex justify-center gap-1.5 flex-wrap">
+                                {weekDays.map(day => (
+                                    <button
+                                        key={day}
+                                        onClick={() => handleNewScheduleDayToggle(day)}
+                                        className={`px-3 py-1.5 rounded-full text-sm font-semibold transition-colors ${
+                                            newSchedule.days.includes(day)
+                                            ? 'bg-yellow-500 text-black'
+                                            : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600'
+                                        }`}
+                                    >
+                                        {day.substring(0, 3)}
+                                    </button>
+                                ))}
+                            </div>
+                            <button
+                                onClick={handleNewScheduleEverydayToggle}
+                                className="mt-3 w-full px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-full transition-colors font-semibold"
+                            >
+                                {newSchedule.days.length === weekDays.length ? 'Clear All' : 'Select Everyday'}
+                            </button>
+                        </div>
+                         <button
+                            onClick={handleAddSchedule}
+                            disabled={!newSchedule.time || newSchedule.days.length === 0}
+                            className="mt-4 w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-full transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            Add Schedule
+                        </button>
+                    </div>
+                </div>
+            </div>
             
             <div className="w-full bg-white dark:bg-gray-800/50 p-6 rounded-lg mb-6 shadow-sm">
                 <h3 className="text-xl font-semibold text-yellow-400 mb-2">🤫 Voice Secret Code</h3>
