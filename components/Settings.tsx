@@ -193,10 +193,10 @@ const Settings: React.FC<SettingsProps> = ({
                                 {autoActivationSchedules.map((schedule, index) => (
                                     <li key={index} className="flex justify-between items-center bg-gray-100 dark:bg-gray-900/50 p-3 rounded-md">
                                         <div>
-                                            <span className="font-mono text-lg font-semibold text-white">{schedule.time}</span>
-                                            <span className="text-gray-400 ml-3">{formatDays(schedule.days)}</span>
+                                            <p className="font-mono text-xl font-bold text-gray-800 dark:text-white">{schedule.time}</p>
+                                            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{formatDays(schedule.days)}</p>
                                         </div>
-                                        <button onClick={() => handleRemoveSchedule(index)} className="px-2 py-1 text-red-400 hover:text-red-300 font-bold text-xl rounded-full hover:bg-red-500/10">
+                                        <button onClick={() => handleRemoveSchedule(index)} className="px-2 py-1 text-red-500 hover:text-red-400 font-bold text-xl rounded-full hover:bg-red-500/10 self-center">
                                             &times;
                                         </button>
                                     </li>

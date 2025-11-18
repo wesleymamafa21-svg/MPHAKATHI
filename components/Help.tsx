@@ -2,6 +2,7 @@ import React from 'react';
 import { EmergencyContact } from '../types';
 import Helplines from './Helplines';
 import SafetyTip from './SafetyTip';
+import ExternalResources from './ExternalResources';
 
 interface HelpProps {
     emergencyContacts: EmergencyContact[];
@@ -62,6 +63,8 @@ const Help: React.FC<HelpProps> = ({
             </div>
 
             <Helplines />
+
+            <ExternalResources />
 
             <div className="w-full mt-6">
                 <SafetyTip tip={safetyTip} onNewTip={onNewTip} />

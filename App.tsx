@@ -27,7 +27,6 @@ import Auth from './components/Auth';
 import Onboarding from './components/Onboarding';
 import TipBanner from './components/TipBanner';
 import ContactManagerModal from './components/ContactManagerModal';
-import RequiredActionBanner from './components/RequiredActionBanner';
 import SafetyActionSuggestion from './components/SafetyActionSuggestion';
 import MphakathiLogo from './components/MphakathiLogo';
 import ActivationPromptModal from './components/ActivationPromptModal';
@@ -177,7 +176,7 @@ const App: React.FC = () => {
     const [completedRecordings, setCompletedRecordings] = useState<CompletedRecording[]>([]);
     const [pin, setPin] = useState<string | null>(null);
     const [isPinModalOpen, setIsPinModalOpen] = useState(false);
-    const [pinAction, setPinAction] = useState<(() => void) | null>(null);
+    const [pinAction, setPinAction] = useState<(() => Promise<void>) | null>(null);
     const [pinError, setPinError] = useState('');
     const [isContinueModalOpen, setIsContinueModalOpen] = useState(false);
     const [isDeEscalationModalOpen, setIsDeEscalationModalOpen] = useState(false);
@@ -216,6 +215,8 @@ const App: React.FC = () => {
     // Auto-Activation State
     const [isAutoActivationEnabled, setIsAutoActivationEnabled] = useState(false);
     const [autoActivationSchedules, setAutoActivationSchedules] = useState<AutoActivationSchedule[]>([]);
+    const [isWakeLockActive, setIsWakeLockActive] = useState(false);
+
 
     const hasAutoActivated = useRef(false);
     const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
@@ -242,6 +243,8 @@ const App: React.FC = () => {
     const chatSessionRef = useRef<Chat | null>(null);
     const alarmRef = useRef<{ stop: () => void } | null>(null);
     const lastTriggeredTimeRef = useRef<string | null>(null);
+    const wakeLockRef = useRef<any>(null);
+
 
     // FIX: Moved isOnboardingComplete declaration before its first usage to resolve block-scoped variable error.
     const isOnboardingComplete = (voiceSafeCode || vscSkipped) && (emergencyContacts.length > 0 || contactsSkipped) && !!pin;
@@ -750,8 +753,15 @@ Mphakathi Network has been notified.
 
     }, [handleEmergencyTrigger]);
 
-    const forceStopListening = useCallback((closeSession = true) => {
+    const forceStopListening = useCallback(async (closeSession = true) => {
         if (!isListeningRef.current && !closeSession) return;
+
+        if (wakeLockRef.current) {
+            await wakeLockRef.current.release();
+            wakeLockRef.current = null;
+            setIsWakeLockActive(false);
+        }
+
         resetSosState();
         if (checkinIntervalRef.current) clearInterval(checkinIntervalRef.current);
         if (vscReminderIntervalRef.current) clearInterval(vscReminderIntervalRef.current);
@@ -805,6 +815,23 @@ Mphakathi Network has been notified.
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             mediaStreamRef.current = stream;
+
+            if ('wakeLock' in navigator) {
+                try {
+                    const wakeLock = await navigator.wakeLock.request('screen');
+                    wakeLock.addEventListener('release', () => {
+                        setIsWakeLockActive(false);
+                        wakeLockRef.current = null;
+                        console.log('Wake Lock was released due to visibility change.');
+                    });
+                    wakeLockRef.current = wakeLock;
+                    setIsWakeLockActive(true);
+                } catch (err: any) {
+                    console.error(`Wake Lock failed: ${err.name}, ${err.message}`);
+                    setStatusMessage(prev => `${prev} (Screen may sleep)`);
+                }
+            }
+
             setIsListening(true);
             setStatusMessage('Connecting...');
 
@@ -1040,6 +1067,34 @@ Mphakathi Network has been notified.
         }
     }, [currentUser, isOnboardingComplete]);
 
+    // Re-acquire wake lock on visibility change if listening is still active
+    useEffect(() => {
+        const handleVisibilityChange = async () => {
+            if (wakeLockRef.current === null && document.visibilityState === 'visible' && isListeningRef.current) {
+                if ('wakeLock' in navigator) {
+                    try {
+                        const wakeLock = await navigator.wakeLock.request('screen');
+                        wakeLock.addEventListener('release', () => {
+                            setIsWakeLockActive(false);
+                            wakeLockRef.current = null;
+                            console.log('Wake Lock was released.');
+                        });
+                        wakeLockRef.current = wakeLock;
+                        setIsWakeLockActive(true);
+                    } catch (err: any) {
+                        console.error(`Failed to re-acquire wake lock: ${err.name}, ${err.message}`);
+                    }
+                }
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+    }, []);
+
     const handleRecordingStop = () => {
         if (recordedChunksRef.current.length === 0) return;
         const blob = new Blob(recordedChunksRef.current, { type: 'audio/webm' });
@@ -1200,18 +1255,20 @@ If you received this, the system is working.
     };
 
     const handleDeEscalationCancel = () => {
-        setPinAction(() => () => {
+        setPinAction(async () => {
             resetSosState(true);
         });
         setIsPinModalOpen(true);
         setPinError('');
     };
 
-    const handlePinSubmit = (submittedPin: string) => {
+    const handlePinSubmit = async (submittedPin: string) => {
         if (submittedPin === pin) {
             setIsPinModalOpen(false);
             setPinError('');
-            pinAction?.();
+            if (pinAction) {
+                await pinAction();
+            }
             setPinAction(null);
         } else {
             setPinError('Incorrect PIN. Please try again.');
@@ -1264,7 +1321,7 @@ If you received this, the system is working.
             setView('settings');
             return;
         }
-        setPinAction(() => () => {
+        setPinAction(async () => {
             setVoiceSafeCode(null);
             setAlert({ level: AlertLevel.Warning, message: 'Voice Secret Code has been deleted.' });
         });
@@ -1408,7 +1465,7 @@ If you received this, the system is working.
     };
 
     const handleCancelSosRequest = () => {
-        setPinAction(() => () => resetSosState(true));
+        setPinAction(async () => resetSosState(true));
         setIsPinModalOpen(true);
         setPinError('');
     };
@@ -1512,6 +1569,13 @@ If you received this, the system is working.
                             </span>
                         )}
                         <span>{statusMessage}</span>
+                        {isWakeLockActive && (
+                            <span title="Screen will stay awake during session">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fillRule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 14.464A1 1 0 106.465 13.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm-.707-2.122a1 1 0 011.414 0l.707.707a1 1 0 11-1.414 1.414l-.707-.707a1 1 0 010-1.414zM4 11a1 1 0 100-2H3a1 1 0 100 2h1z" clipRule="evenodd" />
+                                </svg>
+                            </span>
+                        )}
                     </p>
                     {moderateConfidenceTrigger && (
                         <p className="text-sm text-yellow-400 animate-pulse">Moderate distress detected. Monitoring closely...</p>
@@ -1644,12 +1708,6 @@ If you received this, the system is working.
                 isOpen={showActivationPrompt}
                 onConfirm={handleConfirmActivation}
                 onDecline={handleDeclineActivation}
-            />
-            <RequiredActionBanner
-                isVisible={currentUser !== null && isOnboardingComplete && emergencyContacts.length === 0}
-                message="Critical: No emergency contacts are set. Mphakathi cannot send alerts."
-                buttonText="Add Contacts Now"
-                onAction={() => setIsContactModalOpen(true)}
             />
             <VscReminderBanner 
                 isVisible={isVscReminderVisible}

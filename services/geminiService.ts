@@ -16,8 +16,8 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
  * @returns The response from the API.
  */
 async function generateContentWithRetry(params: any) {
-    const maxRetries = 3;
-    let delay = 1000; // start with 1 second
+    const maxRetries = 5;
+    let delay = 2000; // start with 2 seconds
 
     for (let i = 0; i < maxRetries; i++) {
         try {
@@ -25,15 +25,18 @@ async function generateContentWithRetry(params: any) {
             return response;
         } catch (error: any) {
             console.error(`Gemini API call failed (attempt ${i + 1}/${maxRetries}):`, error);
-            // Check for common transient error messages
-            const errorMessage = error.toString().toLowerCase();
+            // Check for common transient error messages, checking error.message first for robustness.
+            const errorMessage = (error.message || error.toString()).toLowerCase();
             const isRetryable = errorMessage.includes('overloaded') || 
                                 errorMessage.includes('unavailable') ||
-                                errorMessage.includes('503');
+                                errorMessage.includes('503') ||
+                                errorMessage.includes('rate limit');
 
             if (i < maxRetries - 1 && isRetryable) {
-                console.log(`Retrying in ${delay / 1000}s...`);
-                await sleep(delay);
+                const jitter = Math.random() * 1000; // add up to 1s of jitter
+                const waitTime = delay + jitter;
+                console.log(`Retrying in ${(waitTime / 1000).toFixed(2)}s...`);
+                await sleep(waitTime);
                 delay *= 2; // Exponential backoff
             } else {
                 throw error; // Rethrow if not a retryable error or max retries reached
